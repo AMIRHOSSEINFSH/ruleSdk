@@ -4,6 +4,8 @@ Java 21 library for executing Drools rules locally or through an independent rul
 
 ## Install
 
+The `1.0.0` release is available from Maven Central:
+
 ```xml
 <dependency>
     <groupId>io.github.amirhosseinfsh</groupId>
@@ -12,7 +14,7 @@ Java 21 library for executing Drools rules locally or through an independent rul
 </dependency>
 ```
 
-Install or publish this artifact before referencing it from another project. For Spring Boot property configuration, the consuming application must supply compatible Spring Boot classes.
+See the [rule-sdk 1.0.0 page on Maven Central](https://central.sonatype.com/artifact/io.github.amirhosseinfsh/rule-sdk/1.0.0). For Spring Boot property configuration, the consuming application must supply compatible Spring Boot classes.
 
 ## Configure execution
 
