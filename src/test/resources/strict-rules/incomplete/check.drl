@@ -1,0 +1,7 @@
+package sample
+
+rule "missing metadata"
+when
+    String(this == "ready")
+then
+end

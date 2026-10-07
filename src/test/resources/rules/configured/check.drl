@@ -1,0 +1,9 @@
+package sample
+
+rule "configured check"
+    @MESSAGE("Loaded from classpath")
+    @ERROR(true)
+when
+    String(this == "ready")
+then
+end

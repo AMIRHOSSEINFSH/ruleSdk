@@ -1,30 +1,33 @@
-# ruleSdk 2.0.0
+# rule-sdk 1.0.0
 
-`rule-sdk` executes DRL rules in a consumer application or sends serialized facts to ruleGate. Java 21 is required. The existing `RuleEngineServiceContext` and `DroolsRepository` local APIs remain available; the new `RuleExecutor` is the common entry point for applications that choose an execution mode through Spring Boot configuration.
+Java 21 library for executing Drools rules locally or through an independent ruleGate service. Spring Boot integration is optional. The existing `RuleEngineServiceContext` and `DroolsRepository` APIs remain available; `RuleExecutor` provides one execution interface for applications that select local or remote mode.
 
-## Add the dependency
+## Install
 
 ```xml
 <dependency>
-    <groupId>ir.amirhosseinfsh</groupId>
+    <groupId>io.github.amirhosseinfsh</groupId>
     <artifactId>rule-sdk</artifactId>
-    <version>2.0.0</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
-The version on this branch is a source version; publish or install the artifact before changing a consumer dependency. Spring Boot auto-configuration is optional. The consumer must provide Spring Boot 3.4 or compatible Boot classes for property-based mode selection.
+Install or publish this artifact before referencing it from another project. For Spring Boot property configuration, the consuming application must supply compatible Spring Boot classes.
 
-## Choose a mode in `application.properties`
+## Configure execution
 
-Local rules, loaded from `src/main/resources/rules/<scenario-name>/*.drl`:
+For local DRL files under `src/main/resources/rules/<scenario-name>/*.drl`:
 
 ```properties
 rules.execution.mode=local
 rules.execution.local.rule-dir=rules
 rules.execution.local.auto-load=true
+rules.execution.local.strict-validation-metadata=false
 ```
 
-Remote rules, loaded by ruleGate from its database:
+The strict setting is `false` by default. When set to `true`, every local rule must declare a non-empty `@MESSAGE` and `@ERROR(true)` or `@ERROR(false)` before the ruleset is compiled. The same check applies to local rule updates. If the application supplies its own `LocalRuleEngineService` bean, construct it with strict checking enabled as well.
+
+For remote execution through ruleGate:
 
 ```properties
 rules.execution.mode=remote
@@ -33,56 +36,79 @@ rules.execution.remote.connect-timeout=3s
 rules.execution.remote.request-timeout=10s
 ```
 
-No mode is selected when `rules.execution.mode` is absent, so existing applications keep their current wiring. In local mode, auto-configuration reuses an existing `LocalRuleEngineService` bean if one is registered; otherwise it creates an in-memory local repository and loads rules from the configured classpath directory. In remote mode, it creates an HTTP client for `POST /api/drools/execute`.
+The remote service owns and compiles its rules; this SDK sends facts to `POST /api/drools/execute` and reads its response. Remote DRL must use types available to that service. The local strict setting cannot validate rules stored in the remote service. If `rules.execution.mode` is absent, no `RuleExecutor` is auto-configured.
 
-## Execute a scenario
+## Local rules and results
 
-Inject `RuleExecutor` into a Spring component. Select the scenario on **every call**. For example, the ruleGate scenario ID `186` belongs in the request, not in `application.properties`:
+Local rules are ordinary DRL. Annotations are optional when strict checking is off:
+
+```drl
+package sample
+
+rule "eligible"
+    @MESSAGE("Applicant is eligible")
+    @ERROR(false)
+when
+    String(this == "ready")
+then
+end
+```
+
+The `then` keyword is still required by DRL, but its body can be empty. If the body contains actions, those actions execute. Local rules can also use globals and agenda groups.
+
+The local executor returns one `RuleValidation` per fired rule. `ruleName` is always populated; `message` is `null` without `@MESSAGE`, and `type` is `null` without `@ERROR`. `@ERROR(true)` maps to `ERROR`; `@ERROR(false)` maps to `WARNING`. A rule with no annotations still appears in the result with both optional fields `null`.
+
+```java
+RuleExecutionResult result = ruleExecutor.execute(
+    RuleExecutionRequest.local("configured", List.of("ready"), Map.of(), null));
+
+for (RuleValidation validation : result.validations()) {
+    System.out.println(validation.ruleName() + ": " + validation.message());
+}
+```
+
+To collect your own output from `then`, declare a DRL global and pass the same mutable object in the local request:
+
+```java
+List<String> collected = new ArrayList<>();
+RuleExecutionResult result = ruleExecutor.execute(
+    RuleExecutionRequest.local("my-scenario", List.of(fact),
+        Map.of("collected", collected), "my-agenda-group"));
+// Rules may add values to collected while also producing RuleValidation entries.
+```
+
+The supplied global names must match those declared in the local ruleset. The last request argument selects an agenda group; use `null` for the default agenda. If you construct `LocalRuleEngineService` manually, its three-argument constructor accepts `strictValidationMetadata` as the last argument.
+
+## Remote results
+
+Select the remote scenario on each call:
 
 ```java
 RuleExecutionResult result = ruleExecutor.execute(
     RuleExecutionRequest.remote(186L, List.of(applicant)));
-for (RuleValidation finding : result.validations()) {
-    System.out.println(finding.ruleName() + ": " + finding.message());
-}
 ```
 
-If ruleGate requires authentication, supply the current caller's raw access token on that execution call:
+For an authenticated request, pass the caller's access token on that call:
 
 ```java
-String accessToken = tokenProvider.currentAccessToken();
 RuleExecutionResult result = ruleExecutor.execute(
     RuleExecutionRequest.remote(186L, List.of(applicant)), accessToken);
 ```
 
-The SDK adds `Authorization: Bearer <accessToken>` to that HTTP request only. It does not keep the token in `application.properties` or in the executor instance. Pass `null` or use the one-argument `execute` method when no token is needed. Local mode ignores the token argument, allowing a shared call site to use either configured mode.
+The SDK sends the token as a Bearer header for that request. It maps `content.ruleValidations` from the remote response into `RuleValidation`; missing `ruleName`, `message`, or `type` fields become `null`. Remote requests do not support local globals or agenda groups.
 
-For a local rule that uses a `global java.util.List validations;` collector:
-
-```java
-List<BaseValidationDto> validations = new ArrayList<>();
-RuleExecutionResult result = ruleExecutor.execute(
-    RuleExecutionRequest.local("validateParvaneh", List.of(applicant),
-        Map.of("validations", validations), null));
-// The DRL may append detailed BaseValidationDto objects to validations.
-```
-
-When the same call site must work with either mode, pass both scenario identifiers in a `RuleExecutionRequest`:
+If one call site must work with either configured mode, supply both scenario identifiers and omit local-only options:
 
 ```java
 RuleExecutionRequest request = new RuleExecutionRequest(
-    "validateParvaneh", 186L, List.of(applicant), Map.of(), null);
+    "my-scenario", 186L, List.of(applicant), Map.of(), null);
 RuleExecutionResult result = ruleExecutor.execute(request);
 ```
 
-The common result contains the scenario and rule findings. Local rules create findings through `@MESSAGE` and `@ERROR` rule metadata; local DRL globals still receive their original objects. Remote findings come from ruleGate's `content.ruleValidations` response. The remote `/execute` contract does **not** accept globals or an agenda group, so a request using either is rejected in remote mode. To run a rule remotely, store a compatible DRL rule and its `declare` types in ruleGate. It cannot import Java classes that exist only in the consumer.
+## Test
 
-A consumer such as `parvaresh` currently injects `RuleEngineServiceContext` and creates its own local service. To switch that application by property, migrate its execution call sites to `RuleExecutor` and adapt rules that depend on local globals or consumer Java classes. Merely changing the SDK dependency and the mode property will not redirect the old API to ruleGate.
+Run `mvn test`. Remote tests use a local HTTP test server and do not need a running ruleGate service.
 
-## Manual use without Spring Boot
+## License
 
-Construct `LocalRuleExecutor` with an existing `LocalRuleEngineService`, or construct `RemoteRuleExecutor` with a base URL and timeouts. Both implement `RuleExecutor`.
-
-## Tests
-
-Run `mvn test`. The tests execute local DRL rules and exercise remote HTTP requests against a local test server, including a different scenario ID on each call. They do not require a running ruleGate server.
+This project is licensed under the [Apache License 2.0](LICENSE).

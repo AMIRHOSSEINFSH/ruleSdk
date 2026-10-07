@@ -29,7 +29,7 @@ target/
 build/
 !**/src/main/**/build/
 !**/src/test/**/build/
-/src/main/java/ir/amirhosseinfsh/workflow/templ
+/src/main/java/io/github/amirhosseinfsh/workflow/templ
 
 ### VS Code ###
 .vscode/
